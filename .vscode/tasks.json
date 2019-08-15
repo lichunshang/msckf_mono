@@ -1,0 +1,24 @@
+{
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "g++ build active file",
+            "command": "/usr/bin/g++",
+            "args": [
+                "-g",
+                "${file}",
+                "-o",
+                "${fileDirname}/${fileBasenameNoExtension}"
+            ],
+            "options": {
+                "cwd": "/usr/bin"
+            }
+        },
+        {
+            "label": "ros_prerun",
+            "type": "shell",
+            "command": "source /opt/ros/kinetic/setup.bash && source /home/cs4li/Dev/catkin_ws/devel/setup.bash"
+        }
+    ],
+    "version": "2.0.0"
+}

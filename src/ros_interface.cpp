@@ -12,11 +12,13 @@ namespace msckf_mono
     setup_track_handler();
 
     odom_pub_ = nh.advertise<nav_msgs::Odometry>("odom", 100);
+    path_pub_ = nh.advertise<nav_msgs::Path>("path", 100);
     track_image_pub_ = it_.advertise("track_overlay_image", 1);
 
     imu_sub_ = nh_.subscribe("imu", 200, &RosInterface::imuCallback, this);
     image_sub_ = it_.subscribe("image_mono", 20,
                                &RosInterface::imageCallback, this);
+    path_.header.frame_id = "map";
   }
 
   void RosInterface::imuCallback(const sensor_msgs::ImuConstPtr& imu)
@@ -140,6 +142,12 @@ namespace msckf_mono
     odom.pose.pose.orientation.z = q_out.z();
 
     odom_pub_.publish(odom);
+
+    geometry_msgs::PoseStamped pose_stamped;
+    pose_stamped.pose = odom.pose.pose;
+    pose_stamped.header = odom.header;
+    path_.poses.push_back(pose_stamped);
+    path_pub_.publish(path_);
   }
 
   void RosInterface::publish_extra(const ros::Time& publish_time)

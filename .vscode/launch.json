@@ -1,0 +1,32 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        
+        {
+            "name": "asl_msckf_no_ground_truth",
+            "type": "cppdbg",
+            "request": "launch",
+            // "program": "/home/cs4li/Dev/catkin_ws/devel/lib/msckf_mono/asl_msckf_no_ground_truth",
+            "program": "roslaunch",
+            "args": ["msckf_mono", "asl_msckf.launch", "gdb_debug:=true"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "preLaunchTask": "ros_prerun",
+            "avoidWindowsConsoleRedirection": true,
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "miDebuggerPath": "/usr/bin/gdb"
+        }
+    ]
+}
