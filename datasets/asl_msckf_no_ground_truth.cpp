@@ -26,12 +26,78 @@
 using namespace asl_dataset;
 using namespace synchronizer;
 
+void initial_imu_est_asl(const double &calib_start, const double &calib_end, std::shared_ptr<IMU> &imu0,
+std::shared_ptr<Synchronizer<IMU, Camera, GroundTruth>> &sync, msckf_mono::imuState<float> &firstImuState){
+ // start from standstill
+  while(imu0->get_time()<calib_start && sync->has_next()){
+    sync->next();
+  }
+
+  Eigen::Vector3f accel_accum;
+  Eigen::Vector3f gyro_accum;
+  int num_readings = 0;
+
+  accel_accum.setZero();
+  gyro_accum.setZero();
+
+  while(imu0->get_time()<calib_end && sync->has_next()){
+    auto data_pack = sync->get_data();
+    auto imu_reading = std::get<0>(data_pack);
+
+    if(imu_reading){
+      msckf_mono::imuReading<float> imu_data = imu_reading.get();
+      accel_accum += imu_data.a;
+      gyro_accum += imu_data.omega;
+      num_readings++;
+    }
+
+    sync->next();
+  }
+
+  Eigen::Vector3f accel_mean = accel_accum / num_readings;
+  Eigen::Vector3f gyro_mean = gyro_accum / num_readings;
+
+  firstImuState.b_g = gyro_mean;
+  firstImuState.g << 0.0, 0.0, -9.81;
+  firstImuState.q_IG = Eigen::Quaternionf::FromTwoVectors(-firstImuState.g, accel_mean);
+
+  firstImuState.b_a = firstImuState.q_IG*firstImuState.g + accel_mean;
+
+  firstImuState.p_I_G.setZero();
+  firstImuState.v_I_G.setZero();
+}
+
+// void initial_imu_est_tumvio(const double &calib_start, const double &calib_end, std::shared_ptr<IMU> &imu0,
+// std::shared_ptr<Synchronizer<IMU, Camera, GroundTruth>> &sync, msckf_mono::imuState<float> &firstImuState){
+//   // start from standstill
+//   while(imu0->get_time()<calib_start && sync->has_next()){
+//     sync->next();
+//   }
+
+  
+
+//   while(imu0->get_time()<calib_end && sync->has_next()){
+//     auto data_pack = sync->get_data();
+//     auto imu_reading = std::get<0>(data_pack);
+
+//     if(imu_reading){
+//       msckf_mono::imuReading<float> imu_data = imu_reading.get();
+//       accel_accum += imu_data.a;
+//       gyro_accum += imu_data.omega;
+//       num_readings++;
+//     }
+
+//     sync->next();
+//   }
+// }
+
 int main(int argc, char** argv)
 {
   ros::init(argc, argv, "image_listener");
   ros::NodeHandle nh;
 
   std::string data_set;
+  std::string gt_rel_path;
   double calib_end, calib_start;
   if(!nh.getParam("data_set_path", data_set)){
     std::cerr << "Must define a data_set_path" << std::endl;
@@ -45,16 +111,25 @@ int main(int argc, char** argv)
     std::cerr << "Must define when the system stops a standstill" << std::endl;
     return 0;
   }
+  if(!nh.getParam("gt_rel_path", gt_rel_path)){
+    std::cerr << "Must define gt path relative to the data_set_path" << std::endl;
+    return 0;
+  }
 
   ROS_INFO_STREAM("Accessing dataset at " << data_set);
 
+  bool init_states_with_gt;
+  nh.param<bool>("init_states_with_gt", init_states_with_gt, false);
+
   std::shared_ptr<IMU> imu0;
   std::shared_ptr<Camera> cam0;
+  std::shared_ptr<GroundTruth> gt0;
+  std::shared_ptr<Synchronizer<IMU, Camera, GroundTruth>> sync;
 
   imu0.reset(new IMU("imu0", data_set+"/imu0"));
   cam0.reset(new Camera("cam0", data_set+"/cam0"));
-
-  Synchronizer<IMU, Camera> sync(imu0, cam0);
+  gt0.reset(new GroundTruth("gt0", data_set+"/" + gt_rel_path));
+  sync.reset(new Synchronizer<IMU, Camera, GroundTruth>(imu0, cam0, gt0));
 
   msckf_mono::MSCKF<float> msckf;
 
@@ -132,45 +207,8 @@ int main(int argc, char** argv)
   th.set_grid_size(n_grid_rows, n_grid_cols);
 
   int state_k = 0;
-
-  // start from standstill
-  while(imu0->get_time()<calib_start && sync.has_next()){
-    sync.next();
-  }
-
-  Eigen::Vector3f accel_accum;
-  Eigen::Vector3f gyro_accum;
-  int num_readings = 0;
-
-  accel_accum.setZero();
-  gyro_accum.setZero();
-
-  while(imu0->get_time()<calib_end && sync.has_next()){
-    auto data_pack = sync.get_data();
-    auto imu_reading = std::get<0>(data_pack);
-
-    if(imu_reading){
-      msckf_mono::imuReading<float> imu_data = imu_reading.get();
-      accel_accum += imu_data.a;
-      gyro_accum += imu_data.omega;
-      num_readings++;
-    }
-
-    sync.next();
-  }
-
-  Eigen::Vector3f accel_mean = accel_accum / num_readings;
-  Eigen::Vector3f gyro_mean = gyro_accum / num_readings;
-
   msckf_mono::imuState<float> firstImuState;
-  firstImuState.b_g = gyro_mean;
-  firstImuState.g << 0.0, 0.0, -9.81;
-  firstImuState.q_IG = Eigen::Quaternionf::FromTwoVectors(-firstImuState.g, accel_mean);
-
-  firstImuState.b_a = firstImuState.q_IG*firstImuState.g + accel_mean;
-
-  firstImuState.p_I_G.setZero();
-  firstImuState.v_I_G.setZero();
+  initial_imu_est_asl(calib_start, calib_end, imu0, sync, firstImuState);
 
   msckf.initialize(camera, noise_params, msckf_params, firstImuState);
   msckf_mono::imuState<float> imu_state = msckf.getImuState();
@@ -212,7 +250,7 @@ int main(int argc, char** argv)
   ros::Time start_dataset_time;
   start_dataset_time.fromNSec(imu0->get_time());
 
-  while(sync.has_next() && ros::ok()){
+  while(sync->has_next() && ros::ok()){
     msckf_mono::StageTiming timing_data;
 #define TSTART(X) ros::Time start_##X = ros::Time::now();
 #define TEND(X) ros::Time end_##X = ros::Time::now();
@@ -221,7 +259,7 @@ int main(int argc, char** argv)
                                 timing_data.stages.push_back(#X);}
 
     TSTART(get_data);
-    auto data_pack = sync.get_data();
+    auto data_pack = sync->get_data();
     TEND(get_data);
     TRECORD(get_data);
 
@@ -235,6 +273,8 @@ int main(int argc, char** argv)
       msckf_mono::imuState<float> prev_imu_state = msckf.getImuState();
       msckf_mono::Quaternion<float> prev_rotation = prev_imu_state.q_IG;
       msckf.propagate(imu_data);
+      // std::cout << std::endl << "imu_data.omega" << imu_data.omega << std::endl;
+      // std::cout << std::endl << "imu_data.a" << imu_data.a << std::endl;
 
       Eigen::Vector3f cam_frame_av = (camera.q_CI.inverse() * (imu_data.omega-prev_imu_state.b_g));
       th.add_gyro_reading(cam_frame_av);
@@ -454,11 +494,11 @@ int main(int argc, char** argv)
 
           time_state_pub.publish(timing_data);
 
-          r_cam.sleep();
+          // r_cam.sleep();
         }
       }
     }
 
-    sync.next();
+    sync->next();
   }
 }

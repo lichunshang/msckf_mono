@@ -4,15 +4,13 @@
   <arg name="profile" default="false"/>
 
   <arg name="data_set_path" default="/home/cs4li/Dev/EUROC/MH_03_medium"/>
-  <arg name="stand_still_start" default="1403637142538319104."/>
-  <arg name="stand_still_end"   default="1403637149088318946."/>
 
   <group ns="msckf">
     <param name="data_set_path" value="$(arg data_set_path)"/>
-    <param name="gt_rel_path" value="state_groundtruth_estimate0"/>
-    <param name="init_states_with_gt" value="false"/>
-    <param name="stand_still_start" value="$(arg stand_still_start)"/>
-    <param name="stand_still_end" value="$(arg stand_still_end)"/>
+    <param name="gt_rel_path" value="mocap0"/>
+    <param name="init_states_with_gt" value="true"/> <!-- the stand still times are used as time range for initialization -->
+    <param name="stand_still_start" value="0"/>
+    <param name="stand_still_end" value="0"/>
 
     <param name="feature_cov" value="2"/>
 

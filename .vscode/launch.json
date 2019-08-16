@@ -9,16 +9,16 @@
             "name": "asl_msckf_no_ground_truth",
             "type": "cppdbg",
             "request": "launch",
-            // "program": "/home/cs4li/Dev/catkin_ws/devel/lib/msckf_mono/asl_msckf_no_ground_truth",
-            "program": "roslaunch",
-            "args": ["msckf_mono", "asl_msckf.launch", "gdb_debug:=true"],
+            "program": "/home/cs4li/Dev/catkin_ws/devel/lib/msckf_mono/asl_msckf_no_ground_truth",
+            // "program": "roslaunch",
+            // "args": ["msckf_mono", "asl_msckf.launch", "gdb_debug:=true"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
-            "environment": [],
-            "externalConsole": false,
+            "environment": [{"name":"ROS_NAMESPACE", "value":"msckf"}],
+            // "externalConsole": true,
             "MIMode": "gdb",
-            "preLaunchTask": "ros_prerun",
-            "avoidWindowsConsoleRedirection": true,
+            // "preLaunchTask": "ros_prerun",
+            // "avoidWindowsConsoleRedirection": false,
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",
@@ -26,7 +26,7 @@
                     "ignoreFailures": true
                 }
             ],
-            "miDebuggerPath": "/usr/bin/gdb"
+            // "miDebuggerPath": "/usr/bin/gdb"
         }
     ]
 }
