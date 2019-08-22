@@ -145,7 +145,7 @@ namespace asl_dataset
       GroundTruth(std::string name, std::string folder);
 
       timestamp get_time();
-      msckf_mono::imuState<float> get_data();
+      msckf_mono::Isometry3<float>  get_data();
 
       bool next();
       bool has_next();
@@ -156,7 +156,7 @@ namespace asl_dataset
       msckf_mono::Quaternion<float> q_BS_;
 
 
-      std::vector<std::pair<timestamp, msckf_mono::imuState<float>>> reading_list_;
-      std::vector<std::pair<timestamp, msckf_mono::imuState<float>>>::iterator list_iter_;
+      std::vector<std::pair<timestamp, msckf_mono::Isometry3<float>>> reading_list_;
+      std::vector<std::pair<timestamp, msckf_mono::Isometry3<float>>>::iterator list_iter_;
   };
 }

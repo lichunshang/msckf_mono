@@ -274,15 +274,15 @@ namespace asl_dataset
         if( s.rdbuf()->in_avail() == 0 )
         return false;
 
-        std::pair<timestamp, msckf_mono::imuState<float> > p;
+        std::pair<timestamp, msckf_mono::Isometry3<float> > p;
         char c;
 
         msckf_mono::Vector3<double> tmp_v;
         msckf_mono::Quaternion<double> tmp_q;
 
-        p.second.p_I_G_null = msckf_mono::Vector3<float>::Zero();
-        p.second.v_I_G_null = msckf_mono::Vector3<float>::Zero();
-        p.second.q_IG_null = msckf_mono::Quaternion<float>::Identity();
+        // p.second.p_I_G_null = msckf_mono::Vector3<float>::Zero();
+        // p.second.v_I_G_null = msckf_mono::Vector3<float>::Zero();
+        // p.second.q_IG_null = msckf_mono::Quaternion<float>::Identity();
 
         s >> p.first;
         s >> c;
@@ -293,7 +293,7 @@ namespace asl_dataset
         s >> c;
         s >> tmp_v[2]; //  p_RS_R_z [m]
         s >> c;
-        p.second.p_I_G = tmp_v.cast<float>();
+        p.second.translation() = tmp_v.cast<float>();
 
         s >> tmp_q.w(); //  q_RS_w []
         s >> c;
@@ -303,38 +303,38 @@ namespace asl_dataset
         s >> c;
         s >> tmp_q.z(); //  q_RS_z []
         s >> c;
-        p.second.q_IG = tmp_q.cast<float>();
+        p.second.linear() = tmp_q.toRotationMatrix().cast<float>();
 
-        s >> tmp_v[0]; //  v_RS_R_x [m s^-1]
-        s >> c;
-        s >> tmp_v[1]; //  v_RS_R_y [m s^-1]
-        s >> c;
-        s >> tmp_v[2]; //  v_RS_R_z [m s^-1]
-        s >> c;
-        p.second.v_I_G = tmp_v.cast<float>();
+        // s >> tmp_v[0]; //  v_RS_R_x [m s^-1]
+        // s >> c;
+        // s >> tmp_v[1]; //  v_RS_R_y [m s^-1]
+        // s >> c;
+        // s >> tmp_v[2]; //  v_RS_R_z [m s^-1]
+        // s >> c;
+        // p.second.v_I_G = tmp_v.cast<float>();
 
-        s >> tmp_v[0]; //  b_w_RS_S_x [rad s^-1]
-        s >> c;
-        s >> tmp_v[1]; //  b_w_RS_S_y [rad s^-1]
-        s >> c;
-        s >> tmp_v[2]; //  b_w_RS_S_z [rad s^-1]
-        s >> c;
-        p.second.b_g = tmp_v.cast<float>();
+        // s >> tmp_v[0]; //  b_w_RS_S_x [rad s^-1]
+        // s >> c;
+        // s >> tmp_v[1]; //  b_w_RS_S_y [rad s^-1]
+        // s >> c;
+        // s >> tmp_v[2]; //  b_w_RS_S_z [rad s^-1]
+        // s >> c;
+        // p.second.b_g = tmp_v.cast<float>();
 
-        s >> tmp_v[0]; //  b_w_RS_S_x [rad s^-1]
-        s >> c;
-        s >> tmp_v[1]; //  b_w_RS_S_y [rad s^-1]
-        s >> c;
-        s >> tmp_v[2]; //  b_w_RS_S_z [rad s^-1]
-        p.second.b_a = tmp_v.cast<float>();
+        // s >> tmp_v[0]; //  b_w_RS_S_x [rad s^-1]
+        // s >> c;
+        // s >> tmp_v[1]; //  b_w_RS_S_y [rad s^-1]
+        // s >> c;
+        // s >> tmp_v[2]; //  b_w_RS_S_z [rad s^-1]
+        // p.second.b_a = tmp_v.cast<float>();
 
-        p.second.g[0] = 0.0;
-        p.second.g[1] = 0.0;
-        p.second.g[2] = -9.81;
+        // p.second.g[0] = 0.0;
+        // p.second.g[1] = 0.0;
+        // p.second.g[2] = -9.81;
 
-        p.second.v_I_G = p.second.q_IG * p.second.v_I_G;
-        p.second.q_IG = p.second.q_IG.inverse();
-        p.second.p_I_G = p.second.p_I_G;
+        // p.second.v_I_G = p.second.q_IG * p.second.v_I_G;
+        // p.second.q_IG = p.second.q_IG.inverse();
+        // p.second.p_I_G = p.second.p_I_G;
         // Check this
 
         reading_list_.push_back(p);
@@ -349,7 +349,7 @@ namespace asl_dataset
     return list_iter_->first;
   }
 
-  msckf_mono::imuState<float> GroundTruth::get_data()
+  msckf_mono::Isometry3<float> GroundTruth::get_data()
   {
     return list_iter_->second;
   }

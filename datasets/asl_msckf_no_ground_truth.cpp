@@ -12,6 +12,7 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <pcl_ros/point_cloud.h>
 #include <pcl/point_types.h>
+#include <sophus/geometry.hpp>
 
 #include <msckf_mono/corner_detector.h>
 #include <msckf_mono/StageTiming.h>
@@ -67,29 +68,163 @@ std::shared_ptr<Synchronizer<IMU, Camera, GroundTruth>> &sync, msckf_mono::imuSt
   firstImuState.v_I_G.setZero();
 }
 
-// void initial_imu_est_tumvio(const double &calib_start, const double &calib_end, std::shared_ptr<IMU> &imu0,
-// std::shared_ptr<Synchronizer<IMU, Camera, GroundTruth>> &sync, msckf_mono::imuState<float> &firstImuState){
-//   // start from standstill
-//   while(imu0->get_time()<calib_start && sync->has_next()){
-//     sync->next();
-//   }
+// Use ground truth values to initialize MSCKF
+void initial_imu_est_tumvio(const double &calib_start, const double &calib_end, 
+  std::shared_ptr<IMU> &imu0, std::shared_ptr<Camera> &cam0,
+  std::shared_ptr<Synchronizer<IMU, Camera, GroundTruth>> &sync, msckf_mono::imuState<float> &firstImuState){
 
+  timestamp prev_gt_ts;
+  msckf_mono::imuReading<float> first_imu;
+  msckf_mono::Isometry3<float> prev_gt;
+  // start from standstill
+  while(sync->get_time()<calib_start && sync->has_next()){
+    auto data_pack = sync->get_data();
+    auto imu_reading = std::get<0>(data_pack);
+    auto gt_reading = std::get<2>(data_pack);
+    if (gt_reading) {
+      prev_gt_ts = sync->get_time();
+      prev_gt = gt_reading.get();
+    }
+    if (imu_reading) {
+      first_imu = imu_reading.get();
+    }
+    sync->next();
+  }
+  assert(std::get<1>(sync->get_data())); // first one must be camera
   
+  // ts, imu, gt
+  std::vector<std::tuple<timestamp, msckf_mono::imuReading<float>, msckf_mono::Isometry3<float>>> data_frame;
+  bool new_cam_frame_received = false;
+  unsigned int new_cam_frame_idx;
 
-//   while(imu0->get_time()<calib_end && sync->has_next()){
-//     auto data_pack = sync->get_data();
-//     auto imu_reading = std::get<0>(data_pack);
+  data_frame.push_back(std::make_tuple(sync->get_time(), first_imu, msckf_mono::Isometry3<float>::Identity()));
+  sync->next();
 
-//     if(imu_reading){
-//       msckf_mono::imuReading<float> imu_data = imu_reading.get();
-//       accel_accum += imu_data.a;
-//       gyro_accum += imu_data.omega;
-//       num_readings++;
-//     }
+  while(true){
+    auto data_pack = sync->get_data();
+    auto imu_reading = std::get<0>(data_pack);
+    auto cam_reading = std::get<1>(data_pack);
+    auto gt_reading = std::get<2>(data_pack);
 
-//     sync->next();
-//   }
-// }
+    if (imu_reading) {
+      data_frame.push_back(std::make_tuple(imu0->get_time(), imu_reading.get(), msckf_mono::Isometry3<float>::Identity()));
+    }
+
+    if (gt_reading) {
+      for (auto &data : data_frame) {
+        timestamp ts = std::get<0>(data);
+        // second clause might not be necessary because measurements are always the latest
+        if (prev_gt_ts <= ts && ts <=sync->get_time()) { 
+          const auto &Tg0 = prev_gt;
+          const auto &Tg1 = gt_reading.get();
+          float interp = static_cast<float>(ts - prev_gt_ts) / static_cast<float>(sync->get_time() - prev_gt_ts);
+          auto T10 = Tg1 * Tg0.inverse();
+          auto T10_interp = Sophus::SE3<float>::exp(interp * Sophus::SE3<float>(T10.matrix()).log()).matrix();
+          auto T_interp = msckf_mono::Isometry3<float>(T10_interp) * Tg0;
+          std::get<2>(data) = T_interp;
+        }
+      }
+      prev_gt_ts = sync->get_time();
+      prev_gt = gt_reading.get();
+    }
+
+    if (cam_reading) {
+      // just a sanity check
+      for (const auto &data:data_frame) {
+        assert(std::get<0>(data) <= sync->get_time());
+      }
+      data_frame.insert(data_frame.end(), std::make_tuple(sync->get_time(), std::get<1>(data_frame.back()), msckf_mono::Isometry3<float>::Identity()));
+      new_cam_frame_received = true;
+      new_cam_frame_idx = data_frame.size() - 1;
+    }
+
+    if (new_cam_frame_received && !std::get<2>(data_frame[new_cam_frame_idx]).matrix().isIdentity()) {
+      // sanity check that all of the ground truth has been initialized
+      for (unsigned int i = 0; i <= new_cam_frame_idx; i++) {
+        assert(!std::get<2>(data_frame[new_cam_frame_idx]).matrix().isIdentity());
+      }
+
+      // add the blocks
+      data_frame.erase(data_frame.begin(), data_frame.begin() + new_cam_frame_idx);
+      new_cam_frame_received = false;
+      new_cam_frame_idx = 0;
+
+      if (sync->get_time()>=calib_end) {
+        break;
+      }
+    }
+
+    sync->next();
+  }
+
+  // int num_processed = 0;
+  // double t_k;
+  // double t_tau;
+  // Eigen::Vector3f alpha;
+  // Eigen::Vector3f beta;
+  // Eigen::Matrix3f R_bk_w;
+  // Eigen::MatrixX3f H;
+  // Eigen::VectorXf z;
+
+  // while 
+
+  // while(imu0->get_time()<calib_end && sync->has_next()){
+  //   auto data_pack = sync->get_data();
+  //   auto imu_reading = std::get<0>(data_pack);
+  //   auto gt_reading = std::get<2>(data_pack);
+
+  //   std::cout << "imu0->get_time()" << imu0->get_time() << std::endl;
+
+  //   if (imu_reading && gt_reading && num_processed == 0){
+  //     auto gt = gt_reading.get();
+  //     R_bk_w = gt.q_IG.toRotationMatrix().transpose();
+  //     t_k = imu0->get_time();
+  //     alpha << 0, 0, 0;
+  //     beta << 0, 0, 0;
+  //     num_processed++;
+  //   }
+
+  //   if (imu_reading && gt_reading &&  num_processed > 0 && std::get<1>(data_pack)) {
+  //     auto gt = gt_reading.get();
+  //     double Dt = (imu0->get_time() - t_k) / 1.0e9;
+  //     t_k = imu0->get_time();
+  //     H.resize(H.rows() + 6, 3);
+  //     H.block<3, 3>(H.rows() - 6, 0) = 0.5 * R_bk_w * Dt * Dt;
+  //     H.block<3, 3>(H.rows() - 3, 0) = R_bk_w * Dt;
+
+  //     z.resize(z.rows() + 6);
+  //     z.segment(z.rows() - 6, 3) = alpha;
+  //     z.segment(z.rows() - 6, 3) = beta;
+
+  //     alpha << 0, 0, 0;
+  //     beta << 0, 0, 0;
+
+  //     R_bk_w = gt.q_IG.toRotationMatrix().transpose();
+  //     num_processed++;
+  //   }
+
+  //   if(imu_reading && gt_reading){
+  //     msckf_mono::imuReading<float> imu_data = imu_reading.get();
+  //     auto gt = gt_reading.get();
+  //     auto imu = imu_reading.get();
+  //     Eigen::Matrix3f R_w_bt = gt.q_IG.toRotationMatrix();
+  //     Eigen::Matrix3f R_bk_bt = R_bk_w * R_w_bt;
+  //     double dt = (imu0->get_time() - t_tau) / 1.0e9;
+  //     alpha = alpha + beta * dt + 0.5 * R_bk_bt * imu.a * dt * dt;
+  //     beta = beta + R_bk_bt * imu.a;
+  //     t_tau = imu0->get_time();
+  //   }
+
+  //   sync->next();
+  // }
+
+  // // finally estimate the gravity vector
+  // Eigen::Vector3f b = H.transpose() * z;
+  // Eigen::Matrix3f A = H.transpose() * H;
+  // Eigen::Vector3f g_est = A.inverse() * b;
+
+  // std::cout << "g_est"  << std::endl << g_est << std::endl;
+}
 
 int main(int argc, char** argv)
 {
@@ -208,7 +343,11 @@ int main(int argc, char** argv)
 
   int state_k = 0;
   msckf_mono::imuState<float> firstImuState;
-  initial_imu_est_asl(calib_start, calib_end, imu0, sync, firstImuState);
+  if (init_states_with_gt) {
+    initial_imu_est_tumvio(calib_start, calib_end, imu0, cam0, sync, firstImuState);
+  } else {
+    initial_imu_est_asl(calib_start, calib_end, imu0, sync, firstImuState);
+  }
 
   msckf.initialize(camera, noise_params, msckf_params, firstImuState);
   msckf_mono::imuState<float> imu_state = msckf.getImuState();

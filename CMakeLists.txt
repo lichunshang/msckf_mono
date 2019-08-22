@@ -3,24 +3,28 @@ project(msckf_mono)
 
 set( CMAKE_EXPORT_COMPILE_COMMANDS ON )
 
-SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++14 -msse4.2 -msse -msse2 -mavx -funroll-loops")
-SET(CMAKE_BUILD_TYPE "RelWithDebInfo")
+# SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++14 -msse4.2 -msse -msse2 -mavx -funroll-loops")
+# SET(CMAKE_BUILD_TYPE "RelWithDebInfo")
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++14")
 
 IF(NOT CMAKE_BUILD_TYPE)
   SET(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build, options are: None (CMAKE_CXX_FLAGS or CMAKE_C_FLAGS used) Debug Release RelWithDebInfo MinSizeRel." FORCE)
 ENDIF()
 
-SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -std=gnu++14 -DEIGEN_NO_DEBUG")
+# SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -std=gnu++14 -DEIGEN_NO_DEBUG")
 IF(DEFINED ENV{ARM_ARCHITECTURE})
-  SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -mfpu=neon -march=armv7-a")
+  SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -mfpu=neon -march=armv7-a -O3 -DEIGEN_NO_DEBUG -funroll-loops")
 ELSE()
-  SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -msse -msse4.2 -msse2")
+  SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -msse -msse4.2 -msse2  -mavx -O3 -DEIGEN_NO_DEBUG -funroll-loops")
 ENDIF()
-SET(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -std=gnu++14 -g")
+SET(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -ggdb -fno-inline-functions -O0")
+
+message(${CMAKE_CXX_FLAGS_DEBUG})
 
 find_package(cmake_modules REQUIRED)
 find_package(Eigen REQUIRED)
 find_package(OpenCV REQUIRED)
+find_package(Sophus REQUIRED)
 
 # separate install -- https://github.com/uzh-rpg/fast
 find_package(fast REQUIRED)
@@ -72,6 +76,7 @@ catkin_package(
 include_directories(
   include
   ${Eigen_INCLUDE_DIRS}
+  ${SOPHUS_HEADER_FILES}
   ${OpenCV_DIR}
   ${catkin_INCLUDE_DIRS}
   ${Boost_INCLUDE_DIRS}
@@ -96,14 +101,14 @@ add_library(msckf_mono
 target_link_libraries(msckf_mono
   ${LINK_LIBS})
 
-add_executable(asl_msckf datasets/asl_msckf.cpp datasets/asl_readers.cpp)
-target_link_libraries(asl_msckf msckf_mono ${LINK_LIBS})
+# add_executable(asl_msckf datasets/asl_msckf.cpp datasets/asl_readers.cpp)
+# target_link_libraries(asl_msckf msckf_mono ${LINK_LIBS})
 
 add_executable(asl_msckf_no_ground_truth datasets/asl_msckf_no_ground_truth.cpp datasets/asl_readers.cpp)
 target_link_libraries(asl_msckf_no_ground_truth msckf_mono ${LINK_LIBS})
 
-add_executable(msckf_mono_node nodes/msckf_mono_node.cpp)
-target_link_libraries(msckf_mono_node msckf_mono ${LINK_LIBS})
+# add_executable(msckf_mono_node nodes/msckf_mono_node.cpp)
+# target_link_libraries(msckf_mono_node msckf_mono ${LINK_LIBS})
 
 # add_executable(pcv_msckf datasets/penncosy_msckf.cpp datasets/penncosy_readers.cpp)
 # target_link_libraries(pcv_msckf ${LINK_LIBS} msckf_mono)

@@ -3,14 +3,14 @@
   <arg name="gdb_debug" default="false"/>
   <arg name="profile" default="false"/>
 
-  <arg name="data_set_path" default="/home/cs4li/Dev/EUROC/MH_03_medium"/>
+  <arg name="data_set_path" default="/home/cs4li/Dev/TUMVIO/dataset-corridor1_512_16/mav0"/>
 
   <group ns="msckf">
     <param name="data_set_path" value="$(arg data_set_path)"/>
     <param name="gt_rel_path" value="mocap0"/>
     <param name="init_states_with_gt" value="true"/> <!-- the stand still times are used as time range for initialization -->
-    <param name="stand_still_start" value="0"/>
-    <param name="stand_still_end" value="0"/>
+    <param name="stand_still_start" value="1520531835551324812."/>
+    <param name="stand_still_end" value="1520531840551351829."/>
 
     <param name="feature_cov" value="2"/>
 

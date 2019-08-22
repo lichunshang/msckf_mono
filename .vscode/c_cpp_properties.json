@@ -1,0 +1,22 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/usr/local/include/g2o/**",
+                "/usr/include/eigen3/**",
+                "/opt/ros/kinetic/include/**",
+                "/home/cs4li/Dev/catkin_ws/src/msckf_mono/include/**",
+                "/home/cs4li/Dev/catkin_ws/src/msckf_mono/include/datasets/**",
+                "/home/cs4li/Dev/catkin_ws/src/msckf_mono/include/msckf_mono/**"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/lib/ccache/clang",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "clang-x64"
+        }
+    ],
+    "version": 4
+}
