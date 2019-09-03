@@ -68,7 +68,7 @@ std::shared_ptr<Synchronizer<IMU, Camera, GroundTruth>> &sync, msckf_mono::imuSt
   firstImuState.v_I_G.setZero();
 }
 
-void add_block_init_tumvio(Eigen::MatrixX3f &H, Eigen::VectorXf &z, 
+void add_block_init_tumvio(Eigen::MatrixXf &H, Eigen::VectorXf &z, 
  const std::vector<std::tuple<timestamp, msckf_mono::imuReading<float>, msckf_mono::Isometry3<float>>> &data_frame) {
   Eigen::Vector3f alpha;
   Eigen::Vector3f beta;
@@ -85,9 +85,19 @@ void add_block_init_tumvio(Eigen::MatrixX3f &H, Eigen::VectorXf &z,
   }
 
   double Dt = (std::get<0>(data_frame[data_frame.size() - 1]) - std::get<0>(data_frame[0])) / 1.0e9;
-  H.conservativeResize(H.rows() + 6,  Eigen::NoChange);
+  if (H.rows() == 0) {
+    H.resize(6, 9);
+    H.setZero();
+  } else {
+    H.conservativeResize(H.rows() + 6,  H.cols() + 3);
+    H.rightCols(3).setZero();
+    H.bottomRows(6).setZero();
+  }
   H.block<3, 3>(H.rows() - 6, 0) = 0.5 * R_bk_w * Dt * Dt;
   H.block<3, 3>(H.rows() - 3, 0) = R_bk_w * Dt;
+  H.block<3, 3>(H.rows() - 6, H.cols() - 6) = -R_bk_w * Dt;
+  H.block<3, 3>(H.rows() - 3, H.cols() - 6) = -R_bk_w;
+  H.block<3, 3>(H.rows() - 3, H.cols() - 3) = R_bk_w;
 
   // std::cout << "R_bk_w" << std::endl << R_bk_w << std::endl << std::endl;
   // std::cout << "0.5 * R_bk_w * Dt * Dt" << std::endl << 0.5 * R_bk_w * Dt * Dt << std::endl << std::endl;
@@ -131,7 +141,7 @@ void initial_imu_est_tumvio(const double &calib_start, const double &calib_end,
   std::vector<std::tuple<timestamp, msckf_mono::imuReading<float>, msckf_mono::Isometry3<float>>> data_frame;
   bool new_cam_frame_received = false;
   unsigned int new_cam_frame_idx;
-  Eigen::MatrixX3f H;
+  Eigen::MatrixXf H;
   Eigen::VectorXf z;
 
   data_frame.push_back(std::make_tuple(sync->get_time(), first_imu, msckf_mono::Isometry3<float>::Identity()));
@@ -197,21 +207,29 @@ void initial_imu_est_tumvio(const double &calib_start, const double &calib_end,
   }
 
   // finally estimate the gravity vector
-  Eigen::Vector3f b = H.transpose() * z;
-  Eigen::Matrix3f A = H.transpose() * H;
-  Eigen::Vector3f g_est = A.inverse() * b;
+  auto b = H.transpose() * z;
+  auto A = H.transpose() * H;
+  auto est = A.inverse() * b;
+  msckf_mono::Vector3<float> g_est = est.segment(0, 3);
+  msckf_mono::Vector3<float> v_est = est.segment(est.rows() - 3, 3);
 
-  auto R_w_bk = std::get<2>(data_frame[0]).linear();
+  auto R_bk_w = std::get<2>(data_frame[0]).linear().transpose();
 
-  // // std::cout << "g_est"  << std::endl << R_w_bk * g_est << std::endl;
-  // firstImuState.b_g = 0;
-  // firstImuState.g << 0.0, 0.0, -9.81;
-  // firstImuState.q_IG = Eigen::Quaternionf::FromTwoVectors(-firstImuState.g, -g_est);
+  std::cout << "R_bk_w * g_est"  << std::endl << R_bk_w * g_est << std::endl;
+  std::cout << "R_bk_w * v_est"  << std::endl << R_bk_w * v_est << std::endl;
 
-  // firstImuState.b_a = firstImuState.q_IG*firstImuState.g - g_est;
+  firstImuState.b_g.setZero();
+  firstImuState.g << 0.0, 0.0, -9.81;
+  firstImuState.q_IG = Eigen::Quaternionf::FromTwoVectors(-firstImuState.g, R_bk_w * g_est);
 
-  // firstImuState.p_I_G.setZero();
-  // firstImuState.v_I_G.setZero();
+  firstImuState.b_a = firstImuState.q_IG*firstImuState.g + R_bk_w * g_est;
+
+  firstImuState.p_I_G.setZero();
+  firstImuState.v_I_G = firstImuState.q_IG.toRotationMatrix() * R_bk_w * v_est;
+
+  std::cout << "firstImuState.g"  << std::endl << firstImuState.g << std::endl;
+  std::cout << "firstImuState.v_I_G"  << std::endl 
+            << firstImuState.q_IG.toRotationMatrix() * R_bk_w * v_est << std::endl;
 }
 
 int main(int argc, char** argv)
