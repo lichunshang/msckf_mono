@@ -305,6 +305,12 @@ namespace asl_dataset
         s >> c;
         p.second.linear() = tmp_q.toRotationMatrix().cast<float>();
 
+        // std::cout << "tmp_v" << std::endl << tmp_v << std::endl << std::endl;
+        // std::cout << "p.second.translation()" << std::endl << p.second.translation() << std::endl << std::endl;
+        // std::cout << "tmp_q coeffs" << std::endl << tmp_q.coeffs() << std::endl << std::endl;
+        // std::cout << "p.second.linear() matrix" << std::endl << p.second.linear().matrix() << std::endl << std::endl;
+
+
         // s >> tmp_v[0]; //  v_RS_R_x [m s^-1]
         // s >> c;
         // s >> tmp_v[1]; //  v_RS_R_y [m s^-1]

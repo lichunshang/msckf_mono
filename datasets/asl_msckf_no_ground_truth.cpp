@@ -86,18 +86,12 @@ void add_block_init_tumvio(Eigen::MatrixXf &H, Eigen::VectorXf &z,
 
   double Dt = (std::get<0>(data_frame[data_frame.size() - 1]) - std::get<0>(data_frame[0])) / 1.0e9;
   if (H.rows() == 0) {
-    H.resize(6, 9);
-    H.setZero();
+    H.resize(6, 3);;
   } else {
-    H.conservativeResize(H.rows() + 6,  H.cols() + 3);
-    H.rightCols(3).setZero();
-    H.bottomRows(6).setZero();
+    H.conservativeResize(H.rows() + 6,  Eigen::NoChange);
   }
   H.block<3, 3>(H.rows() - 6, 0) = 0.5 * R_bk_w * Dt * Dt;
   H.block<3, 3>(H.rows() - 3, 0) = R_bk_w * Dt;
-  H.block<3, 3>(H.rows() - 6, H.cols() - 6) = -R_bk_w * Dt;
-  H.block<3, 3>(H.rows() - 3, H.cols() - 6) = -R_bk_w;
-  H.block<3, 3>(H.rows() - 3, H.cols() - 3) = R_bk_w;
 
   // std::cout << "R_bk_w" << std::endl << R_bk_w << std::endl << std::endl;
   // std::cout << "0.5 * R_bk_w * Dt * Dt" << std::endl << 0.5 * R_bk_w * Dt * Dt << std::endl << std::endl;
@@ -139,6 +133,7 @@ void initial_imu_est_tumvio(const double &calib_start, const double &calib_end,
   
   // ts, imu, gt
   std::vector<std::tuple<timestamp, msckf_mono::imuReading<float>, msckf_mono::Isometry3<float>>> data_frame;
+  std::vector<msckf_mono::Vector3<float>> knot_buffer;
   bool new_cam_frame_received = false;
   unsigned int new_cam_frame_idx;
   Eigen::MatrixXf H;
@@ -198,6 +193,8 @@ void initial_imu_est_tumvio(const double &calib_start, const double &calib_end,
       new_cam_frame_received = false;
       new_cam_frame_idx = 0;
 
+      knot_buffer.push_back(std::get<2>(data_frame[0]).translation());
+
       if (sync->get_time()>=calib_end) {
         break;
       }
@@ -211,11 +208,21 @@ void initial_imu_est_tumvio(const double &calib_start, const double &calib_end,
   auto A = H.transpose() * H;
   auto est = A.inverse() * b;
   msckf_mono::Vector3<float> g_est = est.segment(0, 3);
-  msckf_mono::Vector3<float> v_est = est.segment(est.rows() - 3, 3);
 
   auto R_bk_w = std::get<2>(data_frame[0]).linear().transpose();
 
   std::cout << "R_bk_w * g_est"  << std::endl << R_bk_w * g_est << std::endl;
+
+  // use 6th order finite difference to calculate the velocity
+  msckf_mono::Vector3<float> v_est;
+  v_est << 0, 0, 0;
+  std::vector<double> coeff = {-49./20., 6., -15./2., 20./3., -15./4., 6./5., -1./6.};
+  for (unsigned int i = 0; i < coeff.size(); i++) {
+    v_est += -coeff[i] * knot_buffer[knot_buffer.size() - 1 - i];
+    // std::cout << "knot" << std::endl << knot_buffer[knot_buffer.size() - 1 - i] << std::endl << std::endl;
+  }
+  v_est = v_est / cam0->get_dT();
+
   std::cout << "R_bk_w * v_est"  << std::endl << R_bk_w * v_est << std::endl;
 
   firstImuState.b_g.setZero();
@@ -228,8 +235,7 @@ void initial_imu_est_tumvio(const double &calib_start, const double &calib_end,
   firstImuState.v_I_G = firstImuState.q_IG.toRotationMatrix() * R_bk_w * v_est;
 
   std::cout << "firstImuState.g"  << std::endl << firstImuState.g << std::endl;
-  std::cout << "firstImuState.v_I_G"  << std::endl 
-            << firstImuState.q_IG.toRotationMatrix() * R_bk_w * v_est << std::endl;
+  std::cout << "firstImuState.v_I_G"  << std::endl << firstImuState.v_I_G << std::endl;
 }
 
 int main(int argc, char** argv)
@@ -448,7 +454,7 @@ int main(int argc, char** argv)
         corner_detector::IdVector new_ids;
         th.new_features(new_features, new_ids);
 
-        if(elapsed_clock_time > elapsed_dataset_time){
+        if(false && elapsed_clock_time > elapsed_dataset_time){ // skipping frames
           ROS_ERROR("skipping frame");
         }else{
           TEND(feature_tracking_and_warping);
