@@ -110,7 +110,8 @@ void add_block_init_tumvio(Eigen::MatrixXf &H, Eigen::VectorXf &z,
 // Use ground truth values to initialize MSCKF
 void initial_imu_est_tumvio(const double &calib_start, const double &calib_end, 
   std::shared_ptr<IMU> &imu0, std::shared_ptr<Camera> &cam0,
-  std::shared_ptr<Synchronizer<IMU, Camera, GroundTruth>> &sync, msckf_mono::imuState<float> &firstImuState){
+  std::shared_ptr<Synchronizer<IMU, Camera, GroundTruth>> &sync, msckf_mono::imuState<float> &firstImuState, 
+  std::vector<std::pair<asl_dataset::timestamp, msckf_mono::imuReading<float>>> &residual_imu_reading){
 
   timestamp prev_gt_ts;
   msckf_mono::imuReading<float> first_imu;
@@ -127,6 +128,7 @@ void initial_imu_est_tumvio(const double &calib_start, const double &calib_end,
     if (imu_reading) {
       first_imu = imu_reading.get();
     }
+    // std::cout << sync->get_time() << std::endl;
     sync->next();
   }
   assert(std::get<1>(sync->get_data())); // first one must be camera
@@ -223,13 +225,21 @@ void initial_imu_est_tumvio(const double &calib_start, const double &calib_end,
   }
   v_est = v_est / cam0->get_dT();
 
+  // save the remaining IMU readings for use in state estimation later on
+  for (unsigned int i = 0; i < data_frame.size(); i++) {
+    residual_imu_reading.push_back(std::make_pair(std::get<0>(data_frame[i]), std::get<1>(data_frame[i])));
+  }
+
   std::cout << "R_bk_w * v_est"  << std::endl << R_bk_w * v_est << std::endl;
+
+  g_est = (9.81 * g_est.norm()) * g_est;
 
   firstImuState.b_g.setZero();
   firstImuState.g << 0.0, 0.0, -9.81;
   firstImuState.q_IG = Eigen::Quaternionf::FromTwoVectors(-firstImuState.g, R_bk_w * g_est);
 
-  firstImuState.b_a = firstImuState.q_IG*firstImuState.g + R_bk_w * g_est;
+  // firstImuState.b_a = firstImuState.q_IG*firstImuState.g + R_bk_w * g_est;
+  firstImuState.b_a.setZero();
 
   firstImuState.p_I_G.setZero();
   firstImuState.v_I_G = firstImuState.q_IG.toRotationMatrix() * R_bk_w * v_est;
@@ -342,7 +352,12 @@ int main(int argc, char** argv)
   msckf_params.min_track_length = min_tl;
   msckf_params.max_cam_states = max_cs;
 
-  corner_detector::TrackHandler th(cam0->get_K(), cam0->get_dist_coeffs(), "radtan");
+  std::cout << "cam0->get_K()" << std::endl << cam0->get_K() << std::endl << std::endl;
+  std::cout << "cam0->get_dist_coeffs()" << std::endl << cam0->get_dist_coeffs() << std::endl << std::endl;
+  std::cout << "distortion_model" << std::endl << cam0->get_dist_model() << std::endl << std::endl;
+
+  std::string distortion_model = cam0->get_dist_model() == "equidistant" ? "equidistant" : "radtan";
+  corner_detector::TrackHandler th(cam0->get_K(), cam0->get_dist_coeffs(), distortion_model);
 
   float ransac_threshold;
   nh.param<float>("ransac_threshold", ransac_threshold, 0.000002);
@@ -355,8 +370,9 @@ int main(int argc, char** argv)
 
   int state_k = 0;
   msckf_mono::imuState<float> firstImuState;
+  std::vector<std::pair<asl_dataset::timestamp, msckf_mono::imuReading<float>>> imu_reading_buffer;
   if (init_states_with_gt) {
-    initial_imu_est_tumvio(calib_start, calib_end, imu0, cam0, sync, firstImuState);
+    initial_imu_est_tumvio(calib_start, calib_end, imu0, cam0, sync, firstImuState, imu_reading_buffer);
   } else {
     initial_imu_est_asl(calib_start, calib_end, imu0, sync, firstImuState);
   }
@@ -416,238 +432,250 @@ int main(int argc, char** argv)
 
     auto imu_reading = std::get<0>(data_pack);
 
-    if(imu_reading){
-      state_k++;
+    if(std::get<1>(data_pack)){
+      ros::Time cur_clock_time = ros::Time::now();
+      ros::Time cur_dataset_time;
+      cur_dataset_time.fromNSec(sync->get_time());
 
-      TSTART(imu_prop);
-      msckf_mono::imuReading<float> imu_data = imu_reading.get();
-      msckf_mono::imuState<float> prev_imu_state = msckf.getImuState();
-      msckf_mono::Quaternion<float> prev_rotation = prev_imu_state.q_IG;
-      msckf.propagate(imu_data);
-      // std::cout << std::endl << "imu_data.omega" << imu_data.omega << std::endl;
-      // std::cout << std::endl << "imu_data.a" << imu_data.a << std::endl;
+      float elapsed_dataset_time = (cur_dataset_time - start_dataset_time).toSec();
+      float elapsed_clock_time = (cur_clock_time - start_clock_time).toSec();
 
-      Eigen::Vector3f cam_frame_av = (camera.q_CI.inverse() * (imu_data.omega-prev_imu_state.b_g));
-      th.add_gyro_reading(cam_frame_av);
-      TEND(imu_prop);
-      TRECORD(imu_prop);
+      // hack assumes there will always be 2 or more readings between frames
+      if (imu_reading_buffer.size() >= 2) {
+        // the frame is ready, process the IMU measurements
+        std::vector<msckf_mono::imuReading<float>> imu_readings_w_dt;
+        for (unsigned int i = 0; i < imu_reading_buffer.size() - 1; i++) {
+          msckf_mono::imuReading<float> r = imu_reading_buffer[i].second;
+          r.dT = (imu_reading_buffer[i+1].first - imu_reading_buffer[i].first) / 1e9;
+          imu_readings_w_dt.push_back(r);
+        }
 
-      if(std::get<1>(data_pack)){
-        ros::Time cur_clock_time = ros::Time::now();
-        ros::Time cur_dataset_time;
-        cur_dataset_time.fromNSec(imu0->get_time());
+        imu_readings_w_dt.push_back(imu_reading_buffer.back().second);
+        imu_readings_w_dt.back().dT = (sync->get_time() - imu_reading_buffer[imu_reading_buffer.size() - 2].first) / 1e9;
+        imu_reading_buffer.erase(imu_reading_buffer.begin(), imu_reading_buffer.end()- 1);
+        assert(imu_reading_buffer.size() == 1);
+        imu_reading_buffer[0].first = sync->get_time();
 
-        float elapsed_dataset_time = (cur_dataset_time - start_dataset_time).toSec();
-        float elapsed_clock_time = (cur_clock_time - start_clock_time).toSec();
-
-
-        TSTART(feature_tracking_and_warping);
-        cv::Mat img = std::get<1>(data_pack).get();
-
-        th.set_current_image(img, ((float)cam0->get_time())/1e9);
-
-        std::vector<msckf_mono::Vector2<float>, Eigen::aligned_allocator<msckf_mono::Vector2<float>>> cur_features;
-        corner_detector::IdVector cur_ids;
-        th.tracked_features(cur_features, cur_ids);
-
-        std::vector<msckf_mono::Vector2<float>, Eigen::aligned_allocator<msckf_mono::Vector2<float>>> new_features;
-        corner_detector::IdVector new_ids;
-        th.new_features(new_features, new_ids);
-
-        if(false && elapsed_clock_time > elapsed_dataset_time){ // skipping frames
-          ROS_ERROR("skipping frame");
-        }else{
-          TEND(feature_tracking_and_warping);
-          TRECORD(feature_tracking_and_warping);
-
-          TSTART(msckf_augment_state);
-          msckf.augmentState(state_k, ((float)imu0->get_time())/1e9);
-          TEND(msckf_augment_state);
-          TRECORD(msckf_augment_state);
-
-          TSTART(msckf_update);
-          msckf.update(cur_features, cur_ids);
-          TEND(msckf_update);
-          TRECORD(msckf_update);
-
-          TSTART(msckf_add_features);
-          msckf.addFeatures(new_features, new_ids);
-          TEND(msckf_add_features);
-          TRECORD(msckf_add_features);
-
-          TSTART(msckf_marginalize);
-          msckf.marginalize();
-          TEND(msckf_marginalize);
-          TRECORD(msckf_marginalize);
-
-          TSTART(msckf_prune_redundant);
-          msckf.pruneRedundantStates();
-          TEND(msckf_prune_redundant);
-          TRECORD(msckf_prune_redundant);
-
-          TSTART(msckf_prune_empty_states);
-          msckf.pruneEmptyStates();
-          TEND(msckf_prune_empty_states);
-          TRECORD(msckf_prune_empty_states);
-
-          auto imu_state = msckf.getImuState();
-          auto q = imu_state.q_IG;
-
-          TSTART(publishing);
-          ros::Time cur_ros_time;
-          cur_ros_time.fromNSec(cam0->get_time());
-          {
-            nav_msgs::Odometry odom;
-            odom.header.stamp = cur_ros_time;
-            odom.header.frame_id = "map";
-            odom.pose.pose.position.x = imu_state.p_I_G[0];
-            odom.pose.pose.position.y = imu_state.p_I_G[1];
-            odom.pose.pose.position.z = imu_state.p_I_G[2];
-            msckf_mono::Quaternion<float> q_out = imu_state.q_IG.inverse();
-            odom.pose.pose.orientation.w = q_out.w();
-            odom.pose.pose.orientation.x = q_out.x();
-            odom.pose.pose.orientation.y = q_out.y();
-            odom.pose.pose.orientation.z = q_out.z();
-            odom_pub.publish(odom);
-          }
-
-          if(raw_img_pub.getNumSubscribers()>0){
-            cv_bridge::CvImage out_img;
-            out_img.header.frame_id = "cam0"; // Same timestamp and tf frame as input image
-            out_img.header.stamp = cur_ros_time;
-            out_img.encoding = sensor_msgs::image_encodings::TYPE_8UC1; // Or whatever
-            out_img.image    = img; // Your cv::Mat
-            raw_img_pub.publish(out_img.toImageMsg());
-          }
-
-          if(track_img_pub.getNumSubscribers()>0){
-            cv_bridge::CvImage out_img;
-            out_img.header.frame_id = "cam0"; // Same timestamp and tf frame as input image
-            out_img.header.stamp = cur_ros_time;
-            out_img.encoding = sensor_msgs::image_encodings::TYPE_8UC3; // Or whatever
-            out_img.image = th.get_track_image(); // Your cv::Mat
-            track_img_pub.publish(out_img.toImageMsg());
-          }
-
-          if(map_pub.getNumSubscribers()>0){
-            std::vector<Eigen::Vector3f, Eigen::aligned_allocator<Eigen::Vector3f>> map =
-              msckf.getMap();
-            pcl::PointCloud<pcl::PointXYZ>::Ptr pointcloud(new pcl::PointCloud<pcl::PointXYZ>());
-            pointcloud->header.frame_id = "map";
-            pointcloud->height = 1;
-            for (auto& point:map)
-            {
-              pointcloud->points.push_back(pcl::PointXYZ(point(0),
-                    point(1),
-                    point(2)));
-            }
-
-            pointcloud->width = pointcloud->points.size();
-            map_pub.publish(pointcloud);
-          }
-
-          if(cam_pose_pub.getNumSubscribers()>0){
-            geometry_msgs::PoseArray cam_poses;
-
-            auto msckf_cam_poses = msckf.getCamStates();
-            for( auto& cs : msckf_cam_poses ){
-              geometry_msgs::Pose p;
-              p.position.x = cs.p_C_G[0];
-              p.position.y = cs.p_C_G[1];
-              p.position.z = cs.p_C_G[2];
-              msckf_mono::Quaternion<float> q_out = cs.q_CG.inverse();
-              p.orientation.w = q_out.w();
-              p.orientation.x = q_out.x();
-              p.orientation.y = q_out.y();
-              p.orientation.z = q_out.z();
-              cam_poses.poses.push_back(p);
-            }
-
-            cam_poses.header.frame_id = "map";
-            cam_poses.header.stamp = cur_ros_time;
-
-            cam_pose_pub.publish(cam_poses);
-          }
-
-          if(cam_state_pub.getNumSubscribers()>0){
-            msckf_mono::CamStates cam_states;
-
-            auto msckf_cam_states = msckf.getCamStates();
-            for( auto& cs : msckf_cam_states ){
-              msckf_mono::CamState ros_cs;
-
-              ros_cs.stamp.fromSec(cs.time);
-              ros_cs.id = cs.state_id;
-
-              ros_cs.number_tracked_features = cs.tracked_feature_ids.size();
-
-              auto& p = ros_cs.pose;
-              p.position.x = cs.p_C_G[0];
-              p.position.y = cs.p_C_G[1];
-              p.position.z = cs.p_C_G[2];
-              msckf_mono::Quaternion<float> q_out = cs.q_CG.inverse();
-              p.orientation.w = q_out.w();
-              p.orientation.x = q_out.x();
-              p.orientation.y = q_out.y();
-              p.orientation.z = q_out.z();
-
-              cam_states.cam_states.push_back(ros_cs);
-            }
-
-            cam_state_pub.publish(cam_states);
-          }
-
-          if(pruned_cam_states_track_pub.getNumSubscribers()>0){
-            nav_msgs::Path pruned_path;
-            pruned_path.header.stamp = cur_ros_time;
-            pruned_path.header.frame_id = "map";
-            for(auto ci : msckf.getPrunedStates()){
-              geometry_msgs::PoseStamped ps;
-
-              ps.header.stamp.fromNSec(ci.time);
-              ps.header.frame_id = "map";
-
-              ps.pose.position.x = ci.p_C_G[0];
-              ps.pose.position.y = ci.p_C_G[1];
-              ps.pose.position.z = ci.p_C_G[2];
-              msckf_mono::Quaternion<float> q_out = ci.q_CG.inverse();
-              ps.pose.orientation.w = q_out.w();
-              ps.pose.orientation.x = q_out.x();
-              ps.pose.orientation.y = q_out.y();
-              ps.pose.orientation.z = q_out.z();
-
-              pruned_path.poses.push_back(ps);
-            }
-
-            pruned_cam_states_track_pub.publish(pruned_path);
-          }
-
-          {
-            imu_path.header.stamp = cur_ros_time;
-            imu_path.header.frame_id = "map";
-            geometry_msgs::PoseStamped imu_pose;
-            imu_pose.header = imu_path.header;
-            imu_pose.pose.position.x = imu_state.p_I_G[0];
-            imu_pose.pose.position.y = imu_state.p_I_G[1];
-            imu_pose.pose.position.z = imu_state.p_I_G[2];
-            msckf_mono::Quaternion<float> q_out = imu_state.q_IG.inverse();
-            imu_pose.pose.orientation.w = q_out.w();
-            imu_pose.pose.orientation.x = q_out.x();
-            imu_pose.pose.orientation.y = q_out.y();
-            imu_pose.pose.orientation.z = q_out.z();
-
-            imu_path.poses.push_back(imu_pose);
-
-            imu_track_pub.publish(imu_path);
-          }
-          TEND(publishing);
-          TRECORD(publishing);
-
-          time_state_pub.publish(timing_data);
-
-          // r_cam.sleep();
+        for (auto &r : imu_readings_w_dt) {
+          msckf.propagate(r);
         }
       }
+
+      TSTART(feature_tracking_and_warping);
+      cv::Mat img = std::get<1>(data_pack).get();
+
+      th.set_current_image(img, ((float)cam0->get_time())/1e9);
+
+      std::vector<msckf_mono::Vector2<float>, Eigen::aligned_allocator<msckf_mono::Vector2<float>>> cur_features;
+      corner_detector::IdVector cur_ids;
+      th.tracked_features(cur_features, cur_ids);
+
+      std::vector<msckf_mono::Vector2<float>, Eigen::aligned_allocator<msckf_mono::Vector2<float>>> new_features;
+      corner_detector::IdVector new_ids;
+      th.new_features(new_features, new_ids);
+
+      if(false && elapsed_clock_time > elapsed_dataset_time){ // skipping frames
+        ROS_ERROR("skipping frame");
+      }else{
+        TEND(feature_tracking_and_warping);
+        TRECORD(feature_tracking_and_warping);
+
+        TSTART(msckf_augment_state);
+        msckf.augmentState(state_k, ((float)sync->get_time())/1e9);
+        TEND(msckf_augment_state);
+        TRECORD(msckf_augment_state);
+
+        TSTART(msckf_update);
+        msckf.update(cur_features, cur_ids);
+        TEND(msckf_update);
+        TRECORD(msckf_update);
+
+        TSTART(msckf_add_features);
+        msckf.addFeatures(new_features, new_ids);
+        TEND(msckf_add_features);
+        TRECORD(msckf_add_features);
+
+        TSTART(msckf_marginalize);
+        msckf.marginalize();
+        TEND(msckf_marginalize);
+        TRECORD(msckf_marginalize);
+
+        TSTART(msckf_prune_redundant);
+        msckf.pruneRedundantStates();
+        TEND(msckf_prune_redundant);
+        TRECORD(msckf_prune_redundant);
+
+        TSTART(msckf_prune_empty_states);
+        msckf.pruneEmptyStates();
+        TEND(msckf_prune_empty_states);
+        TRECORD(msckf_prune_empty_states);
+
+        auto imu_state = msckf.getImuState();
+        auto q = imu_state.q_IG;
+
+        TSTART(publishing);
+        ros::Time cur_ros_time;
+        cur_ros_time.fromNSec(cam0->get_time());
+        {
+          nav_msgs::Odometry odom;
+          odom.header.stamp = cur_ros_time;
+          odom.header.frame_id = "map";
+          odom.pose.pose.position.x = imu_state.p_I_G[0];
+          odom.pose.pose.position.y = imu_state.p_I_G[1];
+          odom.pose.pose.position.z = imu_state.p_I_G[2];
+          msckf_mono::Quaternion<float> q_out = imu_state.q_IG.inverse();
+          odom.pose.pose.orientation.w = q_out.w();
+          odom.pose.pose.orientation.x = q_out.x();
+          odom.pose.pose.orientation.y = q_out.y();
+          odom.pose.pose.orientation.z = q_out.z();
+          odom_pub.publish(odom);
+        }
+
+        if(raw_img_pub.getNumSubscribers()>0){
+          cv_bridge::CvImage out_img;
+          out_img.header.frame_id = "cam0"; // Same timestamp and tf frame as input image
+          out_img.header.stamp = cur_ros_time;
+          out_img.encoding = sensor_msgs::image_encodings::TYPE_8UC1; // Or whatever
+          out_img.image    = img; // Your cv::Mat
+          raw_img_pub.publish(out_img.toImageMsg());
+        }
+
+        if(track_img_pub.getNumSubscribers()>0){
+          cv_bridge::CvImage out_img;
+          out_img.header.frame_id = "cam0"; // Same timestamp and tf frame as input image
+          out_img.header.stamp = cur_ros_time;
+          out_img.encoding = sensor_msgs::image_encodings::TYPE_8UC3; // Or whatever
+          out_img.image = th.get_track_image(); // Your cv::Mat
+          track_img_pub.publish(out_img.toImageMsg());
+        }
+
+        if(map_pub.getNumSubscribers()>0){
+          std::vector<Eigen::Vector3f, Eigen::aligned_allocator<Eigen::Vector3f>> map =
+            msckf.getMap();
+          pcl::PointCloud<pcl::PointXYZ>::Ptr pointcloud(new pcl::PointCloud<pcl::PointXYZ>());
+          pointcloud->header.frame_id = "map";
+          pointcloud->height = 1;
+          for (auto& point:map)
+          {
+            pointcloud->points.push_back(pcl::PointXYZ(point(0),
+                  point(1),
+                  point(2)));
+          }
+
+          pointcloud->width = pointcloud->points.size();
+          map_pub.publish(pointcloud);
+        }
+
+        if(cam_pose_pub.getNumSubscribers()>0){
+          geometry_msgs::PoseArray cam_poses;
+
+          auto msckf_cam_poses = msckf.getCamStates();
+          for( auto& cs : msckf_cam_poses ){
+            geometry_msgs::Pose p;
+            p.position.x = cs.p_C_G[0];
+            p.position.y = cs.p_C_G[1];
+            p.position.z = cs.p_C_G[2];
+            msckf_mono::Quaternion<float> q_out = cs.q_CG.inverse();
+            p.orientation.w = q_out.w();
+            p.orientation.x = q_out.x();
+            p.orientation.y = q_out.y();
+            p.orientation.z = q_out.z();
+            cam_poses.poses.push_back(p);
+          }
+
+          cam_poses.header.frame_id = "map";
+          cam_poses.header.stamp = cur_ros_time;
+
+          cam_pose_pub.publish(cam_poses);
+        }
+
+        if(cam_state_pub.getNumSubscribers()>0){
+          msckf_mono::CamStates cam_states;
+
+          auto msckf_cam_states = msckf.getCamStates();
+          for( auto& cs : msckf_cam_states ){
+            msckf_mono::CamState ros_cs;
+
+            ros_cs.stamp.fromSec(cs.time);
+            ros_cs.id = cs.state_id;
+
+            ros_cs.number_tracked_features = cs.tracked_feature_ids.size();
+
+            auto& p = ros_cs.pose;
+            p.position.x = cs.p_C_G[0];
+            p.position.y = cs.p_C_G[1];
+            p.position.z = cs.p_C_G[2];
+            msckf_mono::Quaternion<float> q_out = cs.q_CG.inverse();
+            p.orientation.w = q_out.w();
+            p.orientation.x = q_out.x();
+            p.orientation.y = q_out.y();
+            p.orientation.z = q_out.z();
+
+            cam_states.cam_states.push_back(ros_cs);
+          }
+
+          cam_state_pub.publish(cam_states);
+        }
+
+        if(pruned_cam_states_track_pub.getNumSubscribers()>0){
+          nav_msgs::Path pruned_path;
+          pruned_path.header.stamp = cur_ros_time;
+          pruned_path.header.frame_id = "map";
+          for(auto ci : msckf.getPrunedStates()){
+            geometry_msgs::PoseStamped ps;
+
+            ps.header.stamp.fromNSec(ci.time);
+            ps.header.frame_id = "map";
+
+            ps.pose.position.x = ci.p_C_G[0];
+            ps.pose.position.y = ci.p_C_G[1];
+            ps.pose.position.z = ci.p_C_G[2];
+            msckf_mono::Quaternion<float> q_out = ci.q_CG.inverse();
+            ps.pose.orientation.w = q_out.w();
+            ps.pose.orientation.x = q_out.x();
+            ps.pose.orientation.y = q_out.y();
+            ps.pose.orientation.z = q_out.z();
+
+            pruned_path.poses.push_back(ps);
+          }
+
+          pruned_cam_states_track_pub.publish(pruned_path);
+        }
+
+        {
+          imu_path.header.stamp = cur_ros_time;
+          imu_path.header.frame_id = "map";
+          geometry_msgs::PoseStamped imu_pose;
+          imu_pose.header = imu_path.header;
+          imu_pose.pose.position.x = imu_state.p_I_G[0];
+          imu_pose.pose.position.y = imu_state.p_I_G[1];
+          imu_pose.pose.position.z = imu_state.p_I_G[2];
+          msckf_mono::Quaternion<float> q_out = imu_state.q_IG.inverse();
+          imu_pose.pose.orientation.w = q_out.w();
+          imu_pose.pose.orientation.x = q_out.x();
+          imu_pose.pose.orientation.y = q_out.y();
+          imu_pose.pose.orientation.z = q_out.z();
+
+          imu_path.poses.push_back(imu_pose);
+
+          imu_track_pub.publish(imu_path);
+        }
+        TEND(publishing);
+        TRECORD(publishing);
+
+        time_state_pub.publish(timing_data);
+
+        r_cam.sleep();
+      }
+    }
+
+    if (imu_reading) {
+      state_k++;
+      imu_reading_buffer.push_back(std::make_pair(sync->get_time(), imu_reading.get()));
+
+      msckf_mono::imuState<float> prev_imu_state = msckf.getImuState();
+      Eigen::Vector3f cam_frame_av = (camera.q_CI.inverse() * (imu_data.omega-prev_imu_state.b_g));
+      th.add_gyro_reading(cam_frame_av);
     }
 
     sync->next();

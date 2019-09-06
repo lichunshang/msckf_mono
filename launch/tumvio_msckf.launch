@@ -4,13 +4,16 @@
   <arg name="profile" default="false"/>
 
   <arg name="data_set_path" default="/home/cs4li/Dev/TUMVIO/dataset-corridor1_512_16/mav0"/>
+  <arg name="stand_still_start" default="1520531835551324812."/>
+  <arg name="stand_still_end"   default="1520531840551351829."/>
+  <!-- <arg name="stand_still_end"   default="1520531855502503759."/> -->
 
   <group ns="msckf">
     <param name="data_set_path" value="$(arg data_set_path)"/>
     <param name="gt_rel_path" value="mocap0"/>
     <param name="init_states_with_gt" value="true"/> <!-- the stand still times are used as time range for initialization -->
-    <param name="stand_still_start" value="1520531835551324812."/>
-    <param name="stand_still_end" value="1520531840551351829."/>
+    <param name="stand_still_start" value="$(arg stand_still_start)"/>
+    <param name="stand_still_end" value="$(arg stand_still_end)"/>
 
     <param name="feature_cov" value="2"/>
 
@@ -21,8 +24,8 @@
 
     <param name="imu_covars/p_init" value="1e-12"/>
     <param name="imu_covars/q_init" value="1e-5"/>
-    <param name="imu_covars/v_init" value="1e-2"/>
-    <param name="imu_covars/ba_init" value="1e-2"/>
+    <param name="imu_covars/v_init" value="1e0"/>
+    <param name="imu_covars/ba_init" value="1e0"/>
     <param name="imu_covars/bg_init" value="1e-2"/>
 
     <param name="translation_threshold" value="0.01"/><!--Max translation from marginalizing state-->
